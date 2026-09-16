@@ -8,91 +8,92 @@ import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const dataDir = path.join(root, 'data');
-const settingsPath = path.join(dataDir, 'settings.json');
-await mkdir(dataDir, { recursive: true });
-let settings = {
-  to: '', subject: 'Your morning reminder',
-  message: 'Good morning! Take a moment to plan your day and focus on what matters.',
-  timezone: 'Asia/Dubai', enabled: false,
-  lastSentAt: null, lastScheduledDate: null, lastError: null
-};
-try { settings = { ...settings, ...JSON.parse(await readFile(settingsPath, 'utf8')) }; }
-catch (error) { if (error.code !== 'ENOENT') throw error; }
-
-async function save(next) {
-  await writeFile(`${settingsPath}.tmp`, JSON.stringify(next, null, 2));
-  await rename(`${settingsPath}.tmp`, settingsPath);
-  settings = next;
+const dir = path.resolve(process.env.DATA_DIR || path.join(root, 'data'));
+await mkdir(dir, { recursive: true });
+async function read(name, fallback) {
+  try { return JSON.parse(await readFile(path.join(dir, name), 'utf8')); }
+  catch (e) { if (e.code === 'ENOENT') return fallback; throw e; }
 }
-const configured = () => Boolean(process.env.RESEND_API_KEY && process.env.EMAIL_FROM);
-function validate(input) {
-  if (typeof input.to !== 'string' || !/^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/.test(input.to.trim())) throw new Error('Enter one valid recipient email.');
-  if (typeof input.subject !== 'string' || !input.subject.trim() || input.subject.length > 200) throw new Error('Enter a subject of up to 200 characters.');
-  if (typeof input.message !== 'string' || !input.message.trim() || input.message.length > 20000) throw new Error('Enter a message of up to 20,000 characters.');
-  if (typeof input.timezone !== 'string') throw new Error('Choose a valid timezone.');
-  try { new Intl.DateTimeFormat('en', { timeZone: input.timezone }); } catch { throw new Error('Choose a valid timezone.'); }
-  if (typeof input.enabled !== 'boolean') throw new Error('Invalid schedule setting.');
-  if (input.enabled && !configured()) throw new Error('Configure RESEND_API_KEY and EMAIL_FROM in .env first.');
-  return { to: input.to.trim(), subject: input.subject.trim(), message: input.message, timezone: input.timezone, enabled: input.enabled };
+async function write(name, value) {
+  const target = path.join(dir, name);
+  await writeFile(target + '.tmp', JSON.stringify(value, null, 2));
+  await rename(target + '.tmp', target);
 }
+let tasks = await read('tasks.json', []);
+if (!Array.isArray(tasks)) throw new Error('tasks.json must be an array.');
+let delivery = await read('delivery.json', { lastSentAt: null, lastScheduledDate: null, lastError: null });
 let busy = false;
-async function send(scheduled = false) {
-  if (busy) throw new Error('An email is already being sent. Try again shortly.');
-  if (!configured()) throw new Error('Configure RESEND_API_KEY and EMAIL_FROM in .env first.');
-  const snapshot = { ...settings };
-  validate(snapshot);
-  const date = new Intl.DateTimeFormat('en-CA', { timeZone: snapshot.timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-  if (scheduled && snapshot.lastScheduledDate === date) return;
+const configured = () => Boolean(process.env.RESEND_API_KEY && process.env.EMAIL_FROM && process.env.FROM_EMAIL);
+const state = () => ({ tasks, delivery, configured: configured() });
+
+cron.schedule('0 11 * * *', async () => {
+  if (busy || !tasks.length) return;
   busy = true;
   try {
-    const payload = { from: process.env.EMAIL_FROM, to: snapshot.to, subject: snapshot.subject, text: snapshot.message };
+    const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Dubai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    if (delivery.lastScheduledDate === date) return;
+    if (!configured()) throw new Error('Set RESEND_API_KEY, EMAIL_FROM (sender), and FROM_EMAIL (recipient).');
+    const payload = { from: process.env.EMAIL_FROM, to: process.env.FROM_EMAIL, subject: 'Your daily tasks', text: JSON.stringify(tasks, null, 2) };
     const hash = createHash('sha256').update(JSON.stringify(payload)).digest('hex').slice(0, 24);
-    const idempotencyKey = scheduled ? `morning/${date}/${hash}` : `test/${randomUUID()}`;
-    const { data, error } = await new Resend(process.env.RESEND_API_KEY).emails.send(payload, { idempotencyKey });
+    const { error } = await new Resend(process.env.RESEND_API_KEY).emails.send(payload, { idempotencyKey: 'tasks/' + date + '/' + hash });
     if (error) throw new Error(error.message);
-    await save({ ...settings, lastSentAt: new Date().toISOString(), lastError: null, ...(scheduled ? { lastScheduledDate: date } : {}) });
-    return data;
-  } catch (error) {
-    await save({ ...settings, lastError: error.message });
-    throw error;
+    delivery = { lastSentAt: new Date().toISOString(), lastScheduledDate: date, lastError: null };
+    await write('delivery.json', delivery);
+  } catch (e) {
+    delivery = { ...delivery, lastError: e.message };
+    await write('delivery.json', delivery);
+    console.error('Daily email failed:', e.message);
   } finally { busy = false; }
-}
-let task;
-function schedule() {
-  task?.destroy();
-  task = cron.schedule('0 11 * * *', async () => {
-    if (!settings.enabled) return;
-    try { await send(true); } catch (error) { console.error('Daily email failed:', error.message); }
-  }, { timezone: settings.timezone, noOverlap: true });
-}
-schedule();
+}, { timezone: 'Asia/Dubai', noOverlap: true });
+
 const app = express();
+app.set('trust proxy', 1);
 app.use(express.json({ limit: '64kb' }));
-// Local-only dashboard; reject cross-origin browser mutations.
 app.use('/api', (req, res, next) => {
   const origin = req.get('origin');
-  if (origin && !['http://127.0.0.1:5173', 'http://localhost:5173', `http://127.0.0.1:${process.env.PORT || 3001}`, `http://localhost:${process.env.PORT || 3001}`].includes(origin)) return res.status(403).json({ error: 'Origin not allowed.' });
+  const allowed = ['http://127.0.0.1:5173', 'http://localhost:5173', req.protocol + '://' + req.get('host'), process.env.RENDER_EXTERNAL_URL];
+  if (origin && !allowed.includes(origin)) return res.status(403).json({ error: 'Origin not allowed.' });
+  res.set('Cache-Control', 'no-store');
   next();
 });
-app.get('/api/settings', (req, res) => res.json({ ...settings, configured: configured(), from: process.env.EMAIL_FROM || '' }));
-app.put('/api/settings', async (req, res) => {
-  if (busy) return res.status(409).json({ error: 'Please wait for the current operation to finish.' });
+app.get('/api/tasks', (req, res) => res.json(state()));
+function validate(input) {
+  if (typeof input?.task !== 'string' || !input.task.trim() || input.task.trim().length > 500) throw new Error('Enter a task of 1 to 500 characters.');
+  if (!Number.isSafeInteger(input.minutes) || input.minutes < 1 || input.minutes > 10080) throw new Error('Minutes must be a whole number between 1 and 10,080.');
+  return { task: input.task.trim(), minutes: input.minutes };
+}
+async function mutate(res, operation) {
+  if (busy) return res.status(409).json({ error: 'Another operation is in progress. Try again.' });
   busy = true;
   try {
-    const input = validate(req.body);
-    await save({ ...settings, ...input });
-    schedule();
-    res.json({ ...settings, configured: configured(), from: process.env.EMAIL_FROM || '' });
-  } catch (error) { res.status(400).json({ error: error.message }); }
+    const next = operation();
+    await write('tasks.json', next);
+    tasks = next;
+    res.json(state());
+  } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
   finally { busy = false; }
-});
-app.post('/api/send-test', async (req, res) => {
-  try { res.json({ data: await send() }); }
-  catch (error) { res.status(400).json({ error: error.message }); }
-});
+}
+function find(id) {
+  const index = tasks.findIndex(t => t.id === id);
+  if (index < 0) throw Object.assign(new Error('Task not found. Refresh the page.'), { status: 404 });
+  return index;
+}
+app.post('/api/tasks', (req, res) => mutate(res, () => {
+  if (tasks.length >= 100) throw new Error('You can save up to 100 tasks.');
+  return [...tasks, { id: randomUUID(), ...validate(req.body) }];
+}));
+app.put('/api/tasks/:id', (req, res) => mutate(res, () => {
+  const index = find(req.params.id);
+  const next = [...tasks];
+  next[index] = { id: req.params.id, ...validate(req.body) };
+  return next;
+}));
+app.delete('/api/tasks/:id', (req, res) => mutate(res, () => {
+  find(req.params.id);
+  return tasks.filter(t => t.id !== req.params.id);
+}));
 app.use(express.static(path.join(root, 'dist')));
 app.use((error, req, res, next) => res.status(500).json({ error: 'The server could not complete this request.' }));
 const host = process.env.RENDER ? '0.0.0.0' : '127.0.0.1';
 const port = process.env.PORT || 3001;
-app.listen(port, host, () => console.log(`Morning Mail listening on ${host}:${port}`));
+app.listen(port, host, () => console.log('Morning Tasks listening on ' + host + ':' + port));
