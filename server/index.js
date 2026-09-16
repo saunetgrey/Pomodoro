@@ -26,7 +26,7 @@ let busy = false;
 const configured = () => Boolean(process.env.RESEND_API_KEY && process.env.EMAIL_FROM && process.env.FROM_EMAIL);
 const state = () => ({ tasks, delivery, configured: configured() });
 
-cron.schedule('5 22 * * *', async () => {
+cron.schedule('11 22 * * *', async () => {
   if (busy || !tasks.length) return;
   busy = true;
   try {
