@@ -6,6 +6,7 @@ import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
+import { dailyEmail, completedEmail } from './email.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const dir = path.resolve(process.env.DATA_DIR || path.join(root, 'data'));
@@ -23,17 +24,19 @@ let tasks = await read('tasks.json', []);
 if (!Array.isArray(tasks)) throw new Error('tasks.json must be an array.');
 let delivery = await read('delivery.json', { lastSentAt: null, lastScheduledDate: null, lastError: null });
 let busy = false;
+let runs = await read('timers.json', []);
+const baseUrl = (process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || 'http://127.0.0.1:5173').replace(/\/$/, '');
 const configured = () => Boolean(process.env.RESEND_API_KEY && process.env.EMAIL_FROM && process.env.FROM_EMAIL);
-const state = () => ({ tasks, delivery, configured: configured() });
+const state = () => ({ tasks, delivery, runs, configured: configured() });
 
-cron.schedule('14 22 * * *', async () => {
+cron.schedule('0 11 * * *', async () => {
   if (busy || !tasks.length) return;
   busy = true;
   try {
     const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Dubai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
     if (delivery.lastScheduledDate === date) return;
     if (!configured()) throw new Error('Set RESEND_API_KEY, EMAIL_FROM (sender), and FROM_EMAIL (recipient).');
-    const payload = { from: process.env.EMAIL_FROM, to: process.env.FROM_EMAIL, subject: 'Your daily tasks', text: JSON.stringify(tasks, null, 2) };
+    const payload = { from: process.env.EMAIL_FROM, to: process.env.FROM_EMAIL, subject: 'Your daily tasks', text: JSON.stringify(tasks, null, 2), html: dailyEmail(tasks, baseUrl) };
     const hash = createHash('sha256').update(JSON.stringify(payload)).digest('hex').slice(0, 24);
     const { error } = await new Resend(process.env.RESEND_API_KEY).emails.send(payload, { idempotencyKey: 'tasks/' + date + '/' + hash });
     if (error) throw new Error(error.message);
@@ -47,6 +50,28 @@ cron.schedule('14 22 * * *', async () => {
 }, { timezone: 'Asia/Dubai', noOverlap: true });
 
 const app = express();
+cron.schedule('*/10 * * * * *', async () => {
+  if (busy || !configured()) return;
+  busy = true;
+  try {
+    for (const run of runs) {
+      if (run.notifiedAt || Date.parse(run.endsAt) > Date.now() || (run.retryAt && Date.parse(run.retryAt) > Date.now())) continue;
+      try {
+        const { error } = await new Resend(process.env.RESEND_API_KEY).emails.send({
+          from: process.env.EMAIL_FROM, to: run.recipient, subject: 'Task completed: ' + run.task,
+          text: 'Task completed: ' + run.task + '\nYour ' + run.minutes + '-minute timer is complete.', html: completedEmail(run)
+        }, { idempotencyKey: 'completion/' + run.id });
+        if (error) throw new Error(error.message);
+        run.notifiedAt = new Date().toISOString(); run.lastError = null;
+      } catch (error) {
+        run.lastError = error.message; run.retryAt = new Date(Date.now() + 60000).toISOString();
+        console.error('Completion email failed:', error.message);
+      }
+      await write('timers.json', runs);
+    }
+  } catch (error) { console.error('Timer persistence failed:', error.message); }
+  finally { busy = false; }
+}, { noOverlap: true });
 app.set('trust proxy', 1);
 app.use(express.json({ limit: '64kb' }));
 app.use('/api', (req, res, next) => {
@@ -78,6 +103,20 @@ function find(id) {
   if (index < 0) throw Object.assign(new Error('Task not found. Refresh the page.'), { status: 404 });
   return index;
 }
+app.post('/api/tasks/:id/start', async (req, res) => {
+  if (busy) return res.status(409).json({ error: 'Another operation is in progress. Try again.' });
+  busy = true;
+  try {
+    const task = tasks[find(req.params.id)];
+    if (!configured()) throw new Error('Configure email before starting a timer.');
+    if (!runs.some(run => run.taskId === task.id && !run.notifiedAt)) {
+      const next = [...runs, { id: randomUUID(), taskId: task.id, task: task.task, minutes: task.minutes, recipient: process.env.FROM_EMAIL, endsAt: new Date(Date.now() + task.minutes * 60000).toISOString(), notifiedAt: null }];
+      await write('timers.json', next); runs = next;
+    }
+    res.json(state());
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+  finally { busy = false; }
+});
 app.post('/api/tasks', (req, res) => mutate(res, () => {
   if (tasks.length >= 100) throw new Error('You can save up to 100 tasks.');
   return [...tasks, { id: randomUUID(), ...validate(req.body) }];
