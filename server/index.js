@@ -93,4 +93,6 @@ app.post('/api/send-test', async (req, res) => {
 });
 app.use(express.static(path.join(root, 'dist')));
 app.use((error, req, res, next) => res.status(500).json({ error: 'The server could not complete this request.' }));
-app.listen(process.env.PORT || 3001, '127.0.0.1', () => console.log(`Morning Mail: http://127.0.0.1:${process.env.PORT || 3001}`));
+const host = process.env.RENDER ? '0.0.0.0' : '127.0.0.1';
+const port = process.env.PORT || 3001;
+app.listen(port, host, () => console.log(`Morning Mail listening on ${host}:${port}`));
