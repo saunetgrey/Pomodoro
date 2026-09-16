@@ -39,7 +39,7 @@ function App() {
   }
   return <main>
     <header><a className="brand" href="/"><span>morning tasks</span></a><span className="provider">Powered by Resend</span></header>
-    <section className="intro"><span className="eyebrow">MAKE TIME FOR WHAT MATTERS</span><h1>Your day,<br /><em>planned.</em></h1><p>Add your tasks and the time you need.<br />Your saved list arrives by email every morning at 11am.</p></section>
+    <section className="intro"><span className="eyebrow">MAKE TIME FOR WHAT MATTERS</span><h1>Your day,<br /><em>planned.</em></h1><p>Add your tasks and the time you need.<br />Your saved list arrives by email every evening at 10:05pm.</p></section>
     {error && <div className="alert error" role="alert">{error}</div>}
     {notice && <div className="alert" role="status">{notice}</div>}
     {!data ? <div className="card"><p>Connecting to your task list...</p><button onClick={load}>Retry connection</button></div> : <div className="layout">
@@ -51,11 +51,11 @@ function App() {
       <section className="card task-list"><div className="card-heading"><h2>Saved tasks</h2><span className="tag">{data.tasks.length} TASKS</span></div>
         {!data.tasks.length ? <p>No tasks yet. Add one above to start your daily email.</p> : <ul>{data.tasks.map(item => <li key={item.id}><div><strong>{item.task}</strong><small>{item.minutes} minutes</small></div><div className="row-actions"><button disabled={busy} onClick={() => { setEditing(item.id); setTask(item.task); setMinutes(String(item.minutes)); setNotice(''); }}>Edit</button><button disabled={busy} onClick={() => remove(item.id)}>Delete</button></div></li>)}</ul>}
       </section></div>
-      <aside><div className="schedule-card"><span className="eyebrow">DAILY DELIVERY</span><div className="time">11:00<span>AM</span></div><p>Every day · Asia/Dubai</p><div className={'status ' + (data.tasks.length && data.configured ? 'active' : '')}><span />{!data.configured ? 'Email configuration needed' : data.tasks.length ? 'Daily email enabled' : 'Waiting for tasks'}</div><hr /><p>{data.tasks.reduce((total, item) => total + item.minutes, 0)} minutes planned</p><p>{data.delivery.lastSentAt ? 'Last accepted: ' + new Date(data.delivery.lastSentAt).toLocaleString() : 'No email sent yet.'}</p>{data.delivery.lastError && <p className="error-text">{data.delivery.lastError}</p>}</div>
+      <aside><div className="schedule-card"><span className="eyebrow">DAILY DELIVERY</span><div className="time">10:05<span>PM</span></div><p>Every day · Asia/Dubai</p><div className={'status ' + (data.tasks.length && data.configured ? 'active' : '')}><span />{!data.configured ? 'Email configuration needed' : data.tasks.length ? 'Daily email enabled' : 'Waiting for tasks'}</div><hr /><p>{data.tasks.reduce((total, item) => total + item.minutes, 0)} minutes planned</p><p>{data.delivery.lastSentAt ? 'Last accepted: ' + new Date(data.delivery.lastSentAt).toLocaleString() : 'No email sent yet.'}</p>{data.delivery.lastError && <p className="error-text">{data.delivery.lastError}</p>}</div>
         <section className="card json-card"><h2>Saved JSON</h2><pre>{JSON.stringify(data.tasks, null, 2)}</pre></section>
       </aside>
     </div>}
-    <footer>Your tasks, delivered daily.<span>11am, Dubai time.</span></footer>
+    <footer>Your tasks, delivered daily.<span>10:05pm, Dubai time.</span></footer>
   </main>;
 }
 createRoot(document.getElementById('root')).render(<App />);
