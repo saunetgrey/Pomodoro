@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
@@ -18,11 +18,22 @@ function App() {
   const [notice, setNotice] = useState('');
   const [now, setNow] = useState(Date.now());
   const selected = new URLSearchParams(window.location.search).get('task');
+  const startFromEmail = new URLSearchParams(window.location.search).get('start') === '1';
+  const emailStartAttempted = useRef(false);
   async function load() {
     try { setData(await api('/api/tasks')); setError(''); }
     catch (e) { setError(e.message); }
   }
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    if (!data || !selected || !startFromEmail || emailStartAttempted.current) return;
+    emailStartAttempted.current = true;
+    if (!data.tasks.some(item => item.id === selected)) {
+      setError('This task no longer exists.');
+      return;
+    }
+    start(selected);
+  }, [data, selected, startFromEmail]);
   useEffect(() => {
     const tick = setInterval(() => setNow(Date.now()), 1000);
     const refresh = setInterval(() => { api('/api/tasks').then(setData).catch(() => {}); }, 10000);

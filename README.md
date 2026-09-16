@@ -35,7 +35,7 @@ Use an always-running instance for the 11am job. Mount a persistent disk at /var
 The page currently has no authentication; anyone with the URL can edit tasks. Missed runs while the server is off are not sent later. Failed sends are recorded in delivery.json with the next attempt the next day. Resend acceptance does not guarantee inbox delivery.
 ## Task timers and emails
 
-The 11am email includes a designed task list and an Open task timer button for each task, plus a plain-text JSON fallback. Email links open the page and highlight the task; press Start timer to begin. Email clients cannot run live JavaScript timers, and opening a link alone does not start one.
+The 11am email includes a designed task list and a Start timer button for each task, plus a plain-text JSON fallback. Clicking Start timer in the email opens the page and automatically starts that task. No second click is required. The linked page starts the server timer; the email itself does not execute JavaScript. Reopening the link while that task has a pending timer does not start a duplicate.
 
 Each timer uses its task duration when started. The server saves timers in timers.json and checks for completion every 10 seconds. It emails FROM_EMAIL when the timer expires, with failed sends retried every minute. Timers continue if you close the page and resume after server restarts when persistent storage is configured. Editing or deleting a task does not cancel its already-started timer.
 
